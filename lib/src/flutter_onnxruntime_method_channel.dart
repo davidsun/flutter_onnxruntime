@@ -4,6 +4,8 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
@@ -127,6 +129,22 @@ class MethodChannelFlutterOnnxruntime extends FlutterOnnxruntimePlatform {
   @override
   Future<void> releaseOrtValue(String valueId) async {
     await methodChannel.invokeMethod<void>('releaseOrtValue', {'valueId': valueId});
+  }
+
+  @override
+  Future<Map<String, dynamic>> runWithBytesInputFloatOutput(
+    String sessionId,
+    String inputName,
+    Uint8List data,
+    List<int> shape,
+  ) async {
+    final result = await methodChannel.invokeMethod<Map<Object?, Object?>>('runWithBytesInputFloatOutput', {
+      'sessionId': sessionId,
+      'inputName': inputName,
+      'data': data,
+      'shape': shape,
+    });
+    return _convertMapToStringDynamic(result ?? {});
   }
 
   Map<String, dynamic> _convertMapToStringDynamic(Map<Object?, Object?> map) {

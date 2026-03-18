@@ -4,6 +4,8 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
+import 'dart:typed_data';
+
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import 'package:flutter_onnxruntime/src/flutter_onnxruntime_method_channel.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
@@ -123,5 +125,18 @@ abstract class FlutterOnnxruntimePlatform extends PlatformInterface {
   /// [valueId] is the ID of the OrtValue to release
   Future<void> releaseOrtValue(String valueId) {
     throw UnimplementedError('releaseOrtValue() has not been implemented.');
+  }
+
+  /// Run inference with raw uint8 byte input and return float outputs in a single platform call.
+  ///
+  /// This batches tensor creation, inference, output extraction, and cleanup
+  /// into one method channel round trip for optimal performance.
+  Future<Map<String, dynamic>> runWithBytesInputFloatOutput(
+    String sessionId,
+    String inputName,
+    Uint8List data,
+    List<int> shape,
+  ) {
+    throw UnimplementedError('runWithBytesInputFloatOutput() has not been implemented.');
   }
 }

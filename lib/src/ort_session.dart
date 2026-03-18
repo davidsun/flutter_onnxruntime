@@ -4,6 +4,8 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
+import 'dart:typed_data';
+
 import 'package:flutter_onnxruntime/src/flutter_onnxruntime_platform_interface.dart';
 import 'package:flutter_onnxruntime/src/ort_model_metadata.dart';
 import 'package:flutter_onnxruntime/src/ort_provider.dart';
@@ -54,6 +56,37 @@ class OrtSession {
     for (final entry in result.entries) {
       final tensorMap = {'valueId': entry.value[0], 'dataType': entry.value[1], 'shape': entry.value[2]};
       outputs[entry.key] = OrtValue.fromMap(tensorMap);
+    }
+    return outputs;
+  }
+
+  /// Run inference with raw uint8 byte input and return float outputs in a single platform call.
+  ///
+  /// Batches tensor creation, inference, output extraction, and cleanup into
+  /// one method channel round trip for optimal performance.
+  ///
+  /// [inputName] is the name of the model's input node
+  /// [data] is the raw uint8 byte data
+  /// [shape] is the tensor shape (e.g., [1, 224, 224, 3])
+  ///
+  /// Returns a map of output names to float lists.
+  Future<Map<String, List<double>>> runWithBytesInputFloatOutput(
+    String inputName,
+    Uint8List data,
+    List<int> shape,
+  ) async {
+    final result = await FlutterOnnxruntimePlatform.instance.runWithBytesInputFloatOutput(
+      id,
+      inputName,
+      data,
+      shape,
+    );
+    final outputs = <String, List<double>>{};
+    for (final entry in result.entries) {
+      final list = entry.value;
+      if (list is List) {
+        outputs[entry.key] = list.cast<double>();
+      }
     }
     return outputs;
   }

@@ -1173,6 +1173,85 @@ class FlutterOnnxruntimePlugin : FlutterPlugin, MethodCallHandler {
                         result.error("RELEASE_ERROR", e.message, e.stackTraceToString())
                     }
                 }
+                "runWithBytesInputFloatOutput" -> {
+                    try {
+                        val sessionId = call.argument<String>("sessionId")
+                        val inputName = call.argument<String>("inputName")
+                        val data = call.argument<ByteArray>("data")
+                        val shape = call.argument<List<Int>>("shape")
+    
+                        if (sessionId == null || inputName == null || data == null || shape == null) {
+                            result.error("INVALID_ARG", "Missing required arguments", null)
+                            return
+                        }
+    
+                        val session = sessions[sessionId]
+                        if (session == null) {
+                            result.error("INVALID_SESSION", "Session not found", null)
+                            return
+                        }
+    
+                        val longShape = shape.map { it.toLong() }.toLongArray()
+                        val inputTensor = OnnxTensor.createTensor(
+                            ortEnvironment, ByteBuffer.wrap(data), longShape, OnnxJavaType.UINT8
+                        )
+    
+                        val ortOutputs = session.run(mapOf(inputName to inputTensor))
+    
+                        val outputs = HashMap<String, Any>()
+                        for (outputName in session.outputNames) {
+                            val outputValue = ortOutputs[outputName]
+                            val outputTensor = when {
+                                outputValue.toString().startsWith("Optional[") -> {
+                                    try {
+                                        val getMethod = outputValue.javaClass.getMethod("get")
+                                        getMethod.invoke(outputValue) as? OnnxTensor
+                                    } catch (e: Exception) {
+                                        try {
+                                            val orElseMethod = outputValue.javaClass.getMethod("orElse", Object::class.java)
+                                            orElseMethod.invoke(outputValue, null) as? OnnxTensor
+                                        } catch (e2: Exception) {
+                                            null
+                                        }
+                                    }
+                                }
+                                outputValue is OnnxTensor -> outputValue
+                                else -> null
+                            }
+    
+                            if (outputTensor != null) {
+                                val flatSize = outputTensor.info.shape.fold(1L) { acc, d -> acc * d }.toInt()
+                                val floatArray = when (ortTypeToString(outputTensor.info.type)) {
+                                    "float32" -> {
+                                        val arr = FloatArray(flatSize)
+                                        outputTensor.floatBuffer.get(arr)
+                                        arr.map { it.toDouble() }
+                                    }
+                                    "float16" -> {
+                                        val shortArr = ShortArray(flatSize)
+                                        outputTensor.shortBuffer.get(shortArr)
+                                        shortArr.map { Float16Utils.float16ToFloat(it).toDouble() }
+                                    }
+                                    else -> {
+                                        val arr = FloatArray(flatSize)
+                                        outputTensor.floatBuffer.get(arr)
+                                        arr.map { it.toDouble() }
+                                    }
+                                }
+                                outputs[outputName] = floatArray
+                            }
+                        }
+    
+                        ortOutputs.close()
+                        inputTensor.close()
+    
+                        result.success(outputs)
+                    } catch (e: OrtException) {
+                        result.error("INFERENCE_ERROR", e.message, e.stackTraceToString())
+                    } catch (e: Exception) {
+                        result.error("PLUGIN_ERROR", e.message, e.stackTraceToString())
+                    }
+                }
                 else -> {
                     result.notImplemented()
                 }
