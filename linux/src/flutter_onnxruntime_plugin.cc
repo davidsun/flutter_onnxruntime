@@ -65,6 +65,9 @@ static FlMethodResponse *convert_ort_value(FlutterOnnxruntimePlugin *self, FlVal
 static FlMethodResponse *get_ort_value_data(FlutterOnnxruntimePlugin *self, FlValue *args);
 static FlMethodResponse *release_ort_value(FlutterOnnxruntimePlugin *self, FlValue *args);
 
+// Batched inference
+static FlMethodResponse *run_with_bytes_input_float_output(FlutterOnnxruntimePlugin *self, FlValue *args);
+
 // Helper function to map C++ API provider names to OrtProvider enum names
 static std::string mapProviderNameToEnumName(const std::string &providerName) {
   // Map from C++ API provider names to OrtProvider enum names
@@ -170,6 +173,8 @@ static void flutter_onnxruntime_plugin_handle_method_call(FlutterOnnxruntimePlug
     response = get_ort_value_data(self, args);
   } else if (strcmp(method, "releaseOrtValue") == 0) {
     response = release_ort_value(self, args);
+  } else if (strcmp(method, "runWithBytesInputFloatOutput") == 0) {
+    response = run_with_bytes_input_float_output(self, args);
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }
@@ -897,4 +902,93 @@ static FlMethodResponse *release_ort_value(FlutterOnnxruntimePlugin *self, FlVal
   self->tensor_manager->releaseTensor(value_id);
 
   return FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+}
+
+static FlMethodResponse *run_with_bytes_input_float_output(FlutterOnnxruntimePlugin *self, FlValue *args) {
+  FlValue *session_id_value = fl_value_lookup_string(args, "sessionId");
+  FlValue *input_name_value = fl_value_lookup_string(args, "inputName");
+  FlValue *data_value = fl_value_lookup_string(args, "data");
+  FlValue *shape_value = fl_value_lookup_string(args, "shape");
+
+  if (session_id_value == nullptr || fl_value_get_type(session_id_value) != FL_VALUE_TYPE_STRING ||
+      input_name_value == nullptr || fl_value_get_type(input_name_value) != FL_VALUE_TYPE_STRING ||
+      data_value == nullptr || shape_value == nullptr || fl_value_get_type(shape_value) != FL_VALUE_TYPE_LIST) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARG", "Missing required arguments", nullptr));
+  }
+
+  const char *session_id = fl_value_get_string(session_id_value);
+  const char *input_name = fl_value_get_string(input_name_value);
+
+  if (!self->session_manager->hasSession(session_id)) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_SESSION", "Session not found", nullptr));
+  }
+
+  try {
+    size_t data_size = fl_value_get_length(data_value);
+    const uint8_t *raw_data = fl_value_get_uint8_list(data_value);
+
+    size_t shape_size = fl_value_get_length(shape_value);
+    std::vector<int64_t> shape;
+    for (size_t i = 0; i < shape_size; i++) {
+      shape.push_back(fl_value_get_int(fl_value_get_list_value(shape_value, i)));
+    }
+
+    std::vector<uint8_t> input_buffer(raw_data, raw_data + data_size);
+    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    auto input_tensor = Ort::Value::CreateTensor<uint8_t>(memory_info, input_buffer.data(), data_size, shape.data(),
+                                                          shape.size());
+
+    std::vector<Ort::Value> input_tensors;
+    input_tensors.push_back(std::move(input_tensor));
+    std::vector<std::string> input_names = {input_name};
+
+    std::vector<std::string> output_names = self->session_manager->getOutputNames(session_id);
+    std::vector<Ort::Value> output_tensors =
+        self->session_manager->runInference(session_id, input_tensors, input_names, nullptr);
+
+    g_autoptr(FlValue) outputs_map = fl_value_new_map();
+
+    for (size_t i = 0; i < output_tensors.size(); i++) {
+      auto type_info = output_tensors[i].GetTensorTypeAndShapeInfo();
+      size_t element_count = type_info.GetElementCount();
+      auto element_type = type_info.GetElementType();
+
+      FlValue *float_list = fl_value_new_list();
+
+      if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        const float *float_data = output_tensors[i].GetTensorData<float>();
+        for (size_t j = 0; j < element_count; j++) {
+          fl_value_append_take(float_list, fl_value_new_float(static_cast<double>(float_data[j])));
+        }
+      } else if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE) {
+        const double *double_data = output_tensors[i].GetTensorData<double>();
+        for (size_t j = 0; j < element_count; j++) {
+          fl_value_append_take(float_list, fl_value_new_float(double_data[j]));
+        }
+      } else if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+        const int64_t *int64_data = output_tensors[i].GetTensorData<int64_t>();
+        for (size_t j = 0; j < element_count; j++) {
+          fl_value_append_take(float_list, fl_value_new_float(static_cast<double>(int64_data[j])));
+        }
+      } else if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+        const int32_t *int32_data = output_tensors[i].GetTensorData<int32_t>();
+        for (size_t j = 0; j < element_count; j++) {
+          fl_value_append_take(float_list, fl_value_new_float(static_cast<double>(int32_data[j])));
+        }
+      } else {
+        const float *float_data = output_tensors[i].GetTensorData<float>();
+        for (size_t j = 0; j < element_count; j++) {
+          fl_value_append_take(float_list, fl_value_new_float(static_cast<double>(float_data[j])));
+        }
+      }
+
+      fl_value_set_string_take(outputs_map, output_names[i].c_str(), float_list);
+    }
+
+    return FL_METHOD_RESPONSE(fl_method_success_response_new(outputs_map));
+  } catch (const Ort::Exception &e) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new("INFERENCE_ERROR", e.what(), nullptr));
+  } catch (const std::exception &e) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new("PLUGIN_ERROR", e.what(), nullptr));
+  }
 }

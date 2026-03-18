@@ -95,6 +95,8 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
       handleGetOrtValueData(call, result: result)
     case "releaseOrtValue":
       handleReleaseOrtValue(call, result: result)
+    case "runWithBytesInputFloatOutput":
+      handleRunWithBytesInputFloatOutput(call, result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -1022,6 +1024,78 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
     ortValues.removeValue(forKey: valueId)
 
     result(nil)
+  }
+
+  private func handleRunWithBytesInputFloatOutput(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+          let sessionId = args["sessionId"] as? String,
+          let inputName = args["inputName"] as? String,
+          let shape = args["shape"] as? [Int] else {
+      result(FlutterError(code: "INVALID_ARG", message: "Missing required arguments", details: nil))
+      return
+    }
+
+    guard let session = sessions[sessionId] else {
+      result(FlutterError(code: "INVALID_SESSION", message: "Session not found", details: nil))
+      return
+    }
+
+    do {
+      let rawData: Data
+      if let typedData = args["data"] as? FlutterStandardTypedData {
+        rawData = typedData.data
+      } else if let byteArray = args["data"] as? [UInt8] {
+        rawData = Data(byteArray)
+      } else {
+        result(FlutterError(code: "INVALID_ARG", message: "Data must be a byte array", details: nil))
+        return
+      }
+
+      let shapeNumbers = shape.map { NSNumber(value: $0) }
+      let inputData = NSMutableData(data: rawData)
+      let inputTensor = try ORTValue(tensorData: inputData, elementType: .uInt8, shape: shapeNumbers)
+
+      let outputNames = try session.outputNames()
+      let outputs = try session.run(
+        withInputs: [inputName: inputTensor],
+        outputNames: Set(outputNames),
+        runOptions: nil
+      )
+
+      var flutterOutputs: [String: Any] = [:]
+      for (outputName, outputTensor) in outputs {
+        let tensorInfo = try outputTensor.tensorTypeAndShapeInfo()
+        let outputShape = tensorInfo.shape.map { Int(truncating: $0) }
+        let elementCount = outputShape.reduce(1, *)
+        let dataPtr = try outputTensor.tensorData()
+
+        var floatList: [Double]
+        switch tensorInfo.elementType {
+        case .float:
+          let floatPtr = dataPtr.bytes.bindMemory(to: Float.self, capacity: elementCount)
+          let buffer = UnsafeBufferPointer(start: floatPtr, count: elementCount)
+          floatList = buffer.map { Double($0) }
+        case .int64:
+          let int64Ptr = dataPtr.bytes.bindMemory(to: Int64.self, capacity: elementCount)
+          let buffer = UnsafeBufferPointer(start: int64Ptr, count: elementCount)
+          floatList = buffer.map { Double($0) }
+        case .int32:
+          let int32Ptr = dataPtr.bytes.bindMemory(to: Int32.self, capacity: elementCount)
+          let buffer = UnsafeBufferPointer(start: int32Ptr, count: elementCount)
+          floatList = buffer.map { Double($0) }
+        default:
+          let floatPtr = dataPtr.bytes.bindMemory(to: Float.self, capacity: elementCount)
+          let buffer = UnsafeBufferPointer(start: floatPtr, count: elementCount)
+          floatList = buffer.map { Double($0) }
+        }
+
+        flutterOutputs[outputName] = floatList
+      }
+
+      result(flutterOutputs)
+    } catch {
+      result(FlutterError(code: "INFERENCE_ERROR", message: error.localizedDescription, details: nil))
+    }
   }
 
   // Helper function to convert ORTTensorElementDataType to string
