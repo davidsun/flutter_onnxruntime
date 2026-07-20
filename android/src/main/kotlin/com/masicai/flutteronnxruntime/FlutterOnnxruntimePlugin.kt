@@ -205,6 +205,18 @@ class FlutterOnnxruntimePlugin : FlutterPlugin, MethodCallHandler {
         @NonNull result: Result,
     ): Unit =
         synchronized(lock) {
+            // The background task queue runs handlers on default-priority
+            // threads, while the UI thread this replaced is scheduled at
+            // elevated priority for foreground apps. Restore that priority so
+            // inference (and ONNX Runtime's worker pool, which inherits the
+            // creating thread's priority at createSession) does not lose the
+            // CPU to ordinary worker threads when all cores are busy.
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_VIDEO)
+            } catch (_: Exception) {
+                // Never fail a call over scheduling; worst case we keep
+                // default priority.
+            }
             when (call.method) {
                 "getPlatformVersion" -> {
                     result.success("Android ${android.os.Build.VERSION.RELEASE}")
