@@ -269,7 +269,11 @@ class FlutterOnnxruntimePlugin : FlutterPlugin, MethodCallHandler {
                                 ortSessionOptions.addOpenVINO(deviceId.toString())
                             }
                             "QNN" -> {
-                                ortSessionOptions.addQnn(mapOf())
+                                // HTP has no useful fp32 path; float/fp16 ONNX graphs
+                                // need this or createSession hangs. No-op for int8 QDQ.
+                                ortSessionOptions.addQnn(
+                                    mapOf("enable_htp_fp16_precision" to "1"),
+                                )
                             }
                             "ROCM" -> {
                                 ortSessionOptions.addROCM(deviceId)
